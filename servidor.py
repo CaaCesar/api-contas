@@ -26,6 +26,8 @@ class Conta(BaseModel):
     valor: float
     usuario: str
     data: str
+    vencimento: str = ""        # NOVO: Guarda a data de validade
+    status: str = "PENDENTE"    # NOVO: PENDENTE ou PAGO
 
 class EdicaoConta(BaseModel):
     descricao_antiga: str

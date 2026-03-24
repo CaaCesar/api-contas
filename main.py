@@ -1,10 +1,12 @@
+from datetime import datetime
+from tkinter import messagebox
+
 import json
 import os
 import calendar
-from datetime import datetime
 import ttkbootstrap as ttk
-from tkinter import messagebox
 import requests
+import threading
 
 # =====================================================================
 # CAMADA DE DADOS (Conectada ao FastAPI)
@@ -12,7 +14,7 @@ import requests
 class ControladorDeDados:
     def __init__(self):
         # Endereço onde o seu servidor FastAPI está rodando
-        self.api_url = 'http://127.0.0.1:8000'
+        self.api_url = 'https://api-contas-4uei.onrender.com'
         
         # Não precisamos mais inicializar arquivos aqui, o backend cuida disso!
 
@@ -149,23 +151,33 @@ class GerenciadorContas:
         self.entry_senha = ttk.Entry(frame_centro, show="*")
         self.entry_senha.pack(pady=5, fill='x')
         
-        ttk.Button(frame_centro, text="Entrar", command=self.fazer_login, bootstyle="success").pack(pady=20, fill='x')
+        # Salvamos o botão em uma variável (self.btn_login) para podermos alterá-lo
+        self.btn_login = ttk.Button(frame_centro, text="Entrar", command=self.fazer_login, bootstyle="success")
+        self.btn_login.pack(pady=20, fill='x')
 
     def fazer_login(self):
         usuario = self.entry_usuario.get().strip()
         senha = self.entry_senha.get().strip()
         
-        try:
-            # Chama a camada de dados!
-            if self.db.validar_login(usuario, senha):
-                self.usuario_logado = usuario 
-                self.construir_tela_meses()
-            else:
-                messagebox.showerror("Erro", "Usuário ou senha incorretos.")
-        except Exception as e:
-            messagebox.showerror("Erro", f"Erro no sistema: {e}")
+        # Feedback visual imediato e bloqueio de múltiplos cliques
+        self.btn_login.config(text="Entrando... Aguarde", state="disabled")
+        
+        def tarefa_login():
+            try:
+                if self.db.validar_login(usuario, senha):
+                    self.usuario_logado = usuario 
+                    self.root.after(0, self.construir_tela_meses)
+                else:
+                    self.root.after(0, lambda: messagebox.showerror("Erro", "Usuário ou senha incorretos."))
+                    self.root.after(0, lambda: self.btn_login.config(text="Entrar", state="normal"))
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror("Erro", f"Erro no sistema: {e}"))
+                self.root.after(0, lambda: self.btn_login.config(text="Entrar", state="normal"))
 
-    # --- 2. TELA DE MESES ---
+        # Inicia a thread
+        threading.Thread(target=tarefa_login).start()
+
+# --- 2. TELA DE MESES ---
     def construir_tela_meses(self, mensagem_status="", tipo_status="success"):
         self.limpar_tela()
         
@@ -175,33 +187,11 @@ class GerenciadorContas:
             ttk.Button(self.frame_atual, text="⚙️ Painel Administrador", bootstyle="warning", 
                        command=self.abrir_painel_admin).pack(pady=(0, 20))
         
-        # Pede os meses existentes para a camada de dados
-        meses_criados = self.db.obter_meses_existentes()
+        # Label temporária de carregamento
+        lbl_carregando = ttk.Label(self.frame_atual, text="Buscando planilhas na nuvem...", font=("Helvetica", 12, "italic"))
+        lbl_carregando.pack(pady=20)
 
-        ano_atual = datetime.now().year
-        meses_num = ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"]
-        meses_nomes = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", 
-                       "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
-
-        frame_grid = ttk.Frame(self.frame_atual)
-        frame_grid.pack(expand=True)
-
-        for i, mes in enumerate(meses_num):
-            chave_mes = f"{mes}-{ano_atual}"
-            linha = i // 3
-            coluna = i % 3
-            
-            if chave_mes in meses_criados:
-                texto_btn = f"{meses_nomes[i]}\n{ano_atual}"
-                btn = ttk.Button(frame_grid, text=texto_btn, bootstyle="success",
-                                 command=lambda c=chave_mes: self.abrir_planilha_mes(c))
-            else:
-                texto_btn = f"+ Criar\n{meses_nomes[i]} {ano_atual}"
-                btn = ttk.Button(frame_grid, text=texto_btn, bootstyle="light",
-                                 command=lambda c=chave_mes: self.criar_novo_mes(c))
-                
-            btn.grid(row=linha, column=coluna, padx=12, pady=12, ipadx=25, ipady=15, sticky='nsew')
-
+        # Rodapé de mensagens
         frame_rodape = ttk.Frame(self.frame_atual)
         frame_rodape.pack(side='bottom', fill='x', pady=10)
         self.lbl_status = ttk.Label(frame_rodape, text=mensagem_status, font=("Helvetica", 11), bootstyle=tipo_status)
@@ -210,13 +200,54 @@ class GerenciadorContas:
         if mensagem_status:
             self.root.after(4000, lambda: self.lbl_status.config(text="") if self.lbl_status.winfo_exists() else None)
 
-    def criar_novo_mes(self, chave_mes):
-        try:
-            self.db.criar_mes(chave_mes)
-            self.construir_tela_meses(f"Planilha de {chave_mes} criada com sucesso!", "success")
-        except Exception as e:
-            self.construir_tela_meses(f"Erro ao criar planilha: {e}", "danger")
+        def tarefa_buscar_meses():
+            try:
+                meses_criados = self.db.obter_meses_existentes()
+                self.root.after(0, lambda: desenhar_botoes(meses_criados))
+            except Exception:
+                self.root.after(0, lambda: lbl_carregando.config(text="Erro ao conectar com a nuvem.", bootstyle="danger"))
 
+        def desenhar_botoes(meses_criados):
+            lbl_carregando.destroy() # Some com o texto de carregamento
+            
+            ano_atual = datetime.now().year
+            meses_num = ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"]
+            meses_nomes = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", 
+                           "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+
+            frame_grid = ttk.Frame(self.frame_atual)
+            frame_grid.pack(expand=True)
+
+            for i, mes in enumerate(meses_num):
+                chave_mes = f"{mes}-{ano_atual}"
+                linha = i // 3
+                coluna = i % 3
+                
+                if chave_mes in meses_criados:
+                    texto_btn = f"{meses_nomes[i]}\n{ano_atual}"
+                    btn = ttk.Button(frame_grid, text=texto_btn, bootstyle="success",
+                                     command=lambda c=chave_mes: self.abrir_planilha_mes(c))
+                else:
+                    texto_btn = f"+ Criar\n{meses_nomes[i]} {ano_atual}"
+                    btn = ttk.Button(frame_grid, text=texto_btn, bootstyle="light",
+                                     command=lambda c=chave_mes: self.criar_novo_mes(c))
+                    
+                btn.grid(row=linha, column=coluna, padx=12, pady=12, ipadx=25, ipady=15, sticky='nsew')
+
+        threading.Thread(target=tarefa_buscar_meses).start()
+
+    def criar_novo_mes(self, chave_mes):
+        self.lbl_status.config(text="Criando mês na nuvem...", bootstyle="info")
+        
+        def tarefa_criar():
+            try:
+                self.db.criar_mes(chave_mes)
+                self.root.after(0, lambda: self.construir_tela_meses(f"Planilha de {chave_mes} criada com sucesso!", "success"))
+            except Exception as e:
+                self.root.after(0, lambda: self.construir_tela_meses(f"Erro ao criar planilha: {e}", "danger"))
+                
+        threading.Thread(target=tarefa_criar).start()
+    
     def abrir_planilha_mes(self, chave_mes):
         self.mes_selecionado = chave_mes
         self.construir_tela_principal()
@@ -253,19 +284,28 @@ class GerenciadorContas:
         frame_borda = ttk.Frame(parent, bootstyle="dark", padding=1)
         frame_borda.pack(fill='both', expand=True, pady=10)
         
-        tabela = ttk.Treeview(frame_borda, columns=("Nome", "Valor", "Usuario", "Data"), show="headings")
+        # Adicionamos as colunas Vencimento e Status
+        tabela = ttk.Treeview(frame_borda, columns=("Nome", "Valor", "Vencimento", "Status", "Usuario", "Data"), show="headings")
         tabela.pack(fill='both', expand=True)
 
-        tabela.column("Nome", anchor="w", width=250)
-        tabela.column("Valor", anchor="center", width=120)
-        tabela.column("Usuario", anchor="center", width=120)
-        tabela.column("Data", anchor="center", width=150)
+        tabela.column("Nome", anchor="w", width=200)
+        tabela.column("Valor", anchor="center", width=100)
+        tabela.column("Vencimento", anchor="center", width=100)
+        tabela.column("Status", anchor="center", width=100)
+        tabela.column("Usuario", anchor="center", width=100)
+        tabela.column("Data", anchor="center", width=120)
         
-        tabela.heading("Nome", text="Descrição da Conta", anchor="w")
-        tabela.heading("Valor", text="Valor (R$)", anchor="center")
-        tabela.heading("Usuario", text="Criado Por", anchor="center")
-        tabela.heading("Data", text="Data/Hora", anchor="center")
+        tabela.heading("Nome", text="Descrição")
+        tabela.heading("Valor", text="Valor (R$)")
+        tabela.heading("Vencimento", text="Vencimento")
+        tabela.heading("Status", text="Status")
+        tabela.heading("Usuario", text="Criado Por")
+        tabela.heading("Data", text="Data/Hora")
         
+        # Configurando as cores das linhas
+        tabela.tag_configure('pago', foreground='green')
+        tabela.tag_configure('atrasado', foreground='red', font=('Helvetica', 10, 'bold'))
+
         frame_resultados = ttk.Frame(parent)
         frame_resultados.pack(fill='x', pady=10)
         
@@ -275,6 +315,7 @@ class GerenciadorContas:
         lbl_divisao = ttk.Label(frame_resultados, text="Por pessoa (Divisão por 3): R$ 0.00", font=("Helvetica", 14))
         lbl_divisao.pack(side='left')
 
+        # Novos Botões
         ttk.Button(frame_botoes, text="+ Adicionar", bootstyle="primary", 
                    command=lambda tc=tipo_conta, tab=tabela, lt=lbl_total, ld=lbl_divisao: self.abrir_janela_adicao(tc, tab, lt, ld)).pack(side='left', padx=5)
         
@@ -283,29 +324,73 @@ class GerenciadorContas:
                    
         ttk.Button(frame_botoes, text="- Remover", bootstyle="danger",
                    command=lambda tc=tipo_conta, tab=tabela, lt=lbl_total, ld=lbl_divisao: self.remover_conta(tc, tab, lt, ld)).pack(side='left', padx=5)
+
+        # BOTÃO NOVO: Alternar entre PAGO e PENDENTE
+        ttk.Button(frame_botoes, text="✔ Marcar Pago/Pendente", bootstyle="success",
+                   command=lambda tc=tipo_conta, tab=tabela, lt=lbl_total, ld=lbl_divisao: self.alternar_status_conta(tc, tab, lt, ld)).pack(side='right', padx=5)
         
         self.carregar_dados_tabela(tipo_conta, tabela, lbl_total, lbl_divisao)
 
-    # --- 4. CRUD DE TABELAS ---
     def carregar_dados_tabela(self, tipo_conta, tabela, lbl_total, lbl_divisao):
         for item in tabela.get_children():
             tabela.delete(item)
             
-        # Limpo e direto: Pede as contas para a camada de dados
-        contas = self.db.obter_contas(self.mes_selecionado, tipo_conta)
-        
-        soma_total = 0.0
-        for conta in contas:
-            tabela.insert("", "end", values=(conta['descricao'], f"R$ {conta['valor']:.2f}", conta['usuario'], conta['data']))
-            soma_total += float(conta['valor'])
-            
-        lbl_total.config(text=f"Total: R$ {soma_total:.2f}")
-        lbl_divisao.config(text=f"Por pessoa (Divisão por 3): R$ {(soma_total / 3):.2f}")
+        lbl_total.config(text="Buscando dados da nuvem...")
+        lbl_divisao.config(text="Aguarde...")
+
+        def tarefa_em_segundo_plano():
+            try:
+                contas = self.db.obter_contas(self.mes_selecionado, tipo_conta)
+                self.root.after(0, lambda: atualizar_interface(contas))
+            except Exception:
+                self.root.after(0, lambda: lbl_total.config(text="Erro de conexão."))
+
+        def atualizar_interface(contas):
+            soma_total = 0.0
+            hoje = datetime.now().date() # Pega a data local do computador do usuário
+
+            for conta in contas:
+                status_exibicao = conta.get('status', 'PENDENTE')
+                vencimento_str = conta.get('vencimento', '')
+
+                # LÓGICA DE ATRASO: Verifica apenas se for Conta Fixa ou se tiver data preenchida
+                if status_exibicao == 'PENDENTE' and vencimento_str:
+                    try:
+                        data_venc = datetime.strptime(vencimento_str, "%d/%m/%Y").date()
+                        if data_venc < hoje:
+                            status_exibicao = "ATRASADO"
+                    except ValueError:
+                        pass # Ignora se a data estiver num formato estranho
+
+                # Insere a linha definindo a tag (para dar cor)
+                item_id = tabela.insert("", "end", values=(
+                    conta['descricao'], 
+                    f"R$ {conta['valor']:.2f}", 
+                    vencimento_str,
+                    status_exibicao,
+                    conta['usuario'], 
+                    conta['data']
+                ))
+
+                # Aplica as cores criadas
+                if status_exibicao == "PAGO":
+                    tabela.item(item_id, tags=('pago',))
+                elif status_exibicao == "ATRASADO":
+                    tabela.item(item_id, tags=('atrasado',))
+
+                # Só soma no total se não estiver pago (opcional, mas faz sentido para contas a pagar)
+                if status_exibicao != "PAGO":
+                    soma_total += float(conta['valor'])
+                
+            lbl_total.config(text=f"Falta Pagar: R$ {soma_total:.2f}")
+            lbl_divisao.config(text=f"Por pessoa: R$ {(soma_total / 3):.2f}")
+
+        threading.Thread(target=tarefa_em_segundo_plano).start()
 
     def abrir_janela_adicao(self, tipo_conta, tabela, lbl_total, lbl_divisao):
         janela = ttk.Toplevel(self.root)
         janela.title("Adicionar Conta")
-        janela.geometry("300x250")
+        janela.geometry("350x350")
         janela.grab_set() 
         
         ttk.Label(janela, text="Descrição:").pack(pady=(10, 0), padx=20, fill='x')
@@ -315,14 +400,21 @@ class GerenciadorContas:
         ttk.Label(janela, text="Valor (R$):").pack(pady=(10, 0), padx=20, fill='x')
         entry_valor = ttk.Entry(janela)
         entry_valor.pack(pady=5, padx=20, fill='x')
+
+        # NOVO: Widget de Calendário!
+        ttk.Label(janela, text="Vencimento:").pack(pady=(10, 0), padx=20, fill='x')
+        # dateformat="%d/%m/%Y" garante que a data saia no formato brasileiro
+        entry_vencimento = ttk.DateEntry(janela, dateformat="%d/%m/%Y", bootstyle="primary")
+        entry_vencimento.pack(pady=5, padx=20, fill='x')
         
         ttk.Button(janela, text="Salvar", bootstyle="success", 
-                   command=lambda: self.salvar_nova_conta(janela, tipo_conta, tabela, entry_desc.get(), entry_valor.get(), lbl_total, lbl_divisao)
+                   # entry_vencimento.entry.get() puxa o texto de dentro do calendário
+                   command=lambda: self.salvar_nova_conta(janela, tipo_conta, tabela, entry_desc.get(), entry_valor.get(), entry_vencimento.entry.get(), lbl_total, lbl_divisao)
                   ).pack(pady=20)
-
-    def salvar_nova_conta(self, janela, tipo_conta, tabela, descricao, valor_str, lbl_total, lbl_divisao):
+        
+    def salvar_nova_conta(self, janela, tipo_conta, tabela, descricao, valor_str, vencimento_str, lbl_total, lbl_divisao):
         if not descricao or not valor_str:
-            messagebox.showwarning("Aviso", "Preencha todos os campos!")
+            messagebox.showwarning("Aviso", "Preencha os campos principais!")
             return
             
         try:
@@ -335,14 +427,22 @@ class GerenciadorContas:
             "descricao": descricao,
             "valor": valor,
             "usuario": self.usuario_logado,
-            "data": datetime.now().strftime("%d/%m/%Y %H:%M")
+            "data": datetime.now().strftime("%d/%m/%Y %H:%M"),
+            "vencimento": vencimento_str,
+            "status": "PENDENTE"
         }
 
-        # Envia para a camada de dados salvar
-        self.db.adicionar_conta(self.mes_selecionado, tipo_conta, nova_conta)
-            
         janela.destroy()
-        self.carregar_dados_tabela(tipo_conta, tabela, lbl_total, lbl_divisao)
+        lbl_total.config(text="Salvando na nuvem...")
+
+        def tarefa_salvar():
+            try:
+                self.db.adicionar_conta(self.mes_selecionado, tipo_conta, nova_conta)
+                self.root.after(0, lambda: self.carregar_dados_tabela(tipo_conta, tabela, lbl_total, lbl_divisao))
+            except Exception:
+                self.root.after(0, lambda: messagebox.showerror("Erro", "Falha ao salvar na nuvem!"))
+
+        threading.Thread(target=tarefa_salvar).start()
 
     def remover_conta(self, tipo_conta, tabela, lbl_total, lbl_divisao):
         selecionado = tabela.selection()
@@ -363,10 +463,18 @@ class GerenciadorContas:
         if not resposta:
             return
 
-        # Envia o comando de remoção para a camada de dados
-        self.db.remover_conta(self.mes_selecionado, tipo_conta, descricao_alvo, data_alvo)
+        # Feedback visual
+        lbl_total.config(text="Removendo da nuvem...")
 
-        self.carregar_dados_tabela(tipo_conta, tabela, lbl_total, lbl_divisao)
+        def tarefa_remover():
+            try:
+                self.db.remover_conta(self.mes_selecionado, tipo_conta, descricao_alvo, data_alvo)
+                self.root.after(0, lambda: self.carregar_dados_tabela(tipo_conta, tabela, lbl_total, lbl_divisao))
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror("Erro", "Falha ao remover na nuvem!"))
+                self.root.after(0, lambda: self.carregar_dados_tabela(tipo_conta, tabela, lbl_total, lbl_divisao))
+
+        threading.Thread(target=tarefa_remover).start()
 
     def abrir_janela_edicao(self, tipo_conta, tabela, lbl_total, lbl_divisao):
         selecionado = tabela.selection()
@@ -374,19 +482,23 @@ class GerenciadorContas:
             messagebox.showwarning("Aviso", "Selecione uma conta na tabela para editar!")
             return
 
+        # Agora a nossa tabela tem 6 colunas, precisamos de capturar todas na ordem correta
         valores = tabela.item(selecionado[0], 'values')
         descricao_atual = valores[0]
         valor_atual_str = valores[1].replace('R$ ', '') 
-        criador_da_conta = valores[2]
-        data_atual = valores[3]
+        vencimento_atual = valores[2]   # Coluna nova
+        status_atual = valores[3]       # Coluna nova
+        criador_da_conta = valores[4]
+        data_atual = valores[5]
 
+        # Trava de segurança
         if self.usuario_logado != "admin" and self.usuario_logado != criador_da_conta:
-            messagebox.showerror("Acesso Negado", "Você só tem permissão para editar contas que você mesmo criou!")
+            messagebox.showerror("Acesso Negado", "Só tem permissão para editar contas que o próprio criou!")
             return
 
         janela = ttk.Toplevel(self.root)
         janela.title("Editar Conta")
-        janela.geometry("300x250")
+        janela.geometry("350x350")
         janela.grab_set()
 
         ttk.Label(janela, text="Descrição:").pack(pady=(10, 0), padx=20, fill='x')
@@ -399,16 +511,27 @@ class GerenciadorContas:
         entry_valor.insert(0, valor_atual_str) 
         entry_valor.pack(pady=5, padx=20, fill='x')
 
-        ttk.Button(janela, text="Salvar Alterações", bootstyle="success",
+        # NOVO: Adiciona o calendário na janela de edição
+        ttk.Label(janela, text="Vencimento:").pack(pady=(10, 0), padx=20, fill='x')
+        entry_vencimento = ttk.DateEntry(janela, dateformat="%d/%m/%Y", bootstyle="primary")
+        entry_vencimento.pack(pady=5, padx=20, fill='x')
+        
+        # Preenche o calendário com a data que já estava guardada na conta
+        if vencimento_atual:
+            entry_vencimento.entry.delete(0, 'end')
+            entry_vencimento.entry.insert(0, vencimento_atual)
+
+        ttk.Button(janela, text="Guardar Alterações", bootstyle="success",
                    command=lambda: self.salvar_edicao(janela, tipo_conta, tabela, lbl_total, lbl_divisao,
                                                       descricao_atual, data_atual,
-                                                      entry_desc.get(), entry_valor.get())
+                                                      entry_desc.get(), entry_valor.get(), 
+                                                      entry_vencimento.entry.get(), status_atual) # Passamos o vencimento e o status
                   ).pack(pady=20)
 
     def salvar_edicao(self, janela, tipo_conta, tabela, lbl_total, lbl_divisao,
-                      descricao_antiga, data_antiga, nova_descricao, novo_valor_str):
+                      descricao_antiga, data_antiga, nova_descricao, novo_valor_str, novo_vencimento, status_atual):
         if not nova_descricao or not novo_valor_str:
-            messagebox.showwarning("Aviso", "Preencha todos os campos!")
+            messagebox.showwarning("Aviso", "Preencha os campos principais!")
             return
 
         try:
@@ -417,19 +540,28 @@ class GerenciadorContas:
             messagebox.showerror("Erro", "Digite um valor numérico válido.")
             return
 
+        # Montamos o dicionário atualizado com os novos campos
         conta_atualizada = {
             "descricao": nova_descricao,
             "valor": novo_valor,
             "usuario": self.usuario_logado,
-            "data": datetime.now().strftime("%d/%m/%Y %H:%M")
+            "data": datetime.now().strftime("%d/%m/%Y %H:%M"),
+            "vencimento": novo_vencimento,
+            "status": status_atual # Mantém o estado que já estava (PAGO, PENDENTE, etc.)
         }
 
-        # Envia a edição para a camada de dados
-        self.db.editar_conta(self.mes_selecionado, tipo_conta, descricao_antiga, data_antiga, conta_atualizada)
-
         janela.destroy()
-        self.carregar_dados_tabela(tipo_conta, tabela, lbl_total, lbl_divisao)
+        lbl_total.config(text="A guardar edição na nuvem...")
 
+        def tarefa_editar():
+            try:
+                self.db.editar_conta(self.mes_selecionado, tipo_conta, descricao_antiga, data_antiga, conta_atualizada)
+                self.root.after(0, lambda: self.carregar_dados_tabela(tipo_conta, tabela, lbl_total, lbl_divisao))
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror("Erro", "Falha ao editar na nuvem!"))
+                self.root.after(0, lambda: self.carregar_dados_tabela(tipo_conta, tabela, lbl_total, lbl_divisao))
+
+        threading.Thread(target=tarefa_editar).start()
     # --- 5. PAINEL ADMIN ---
     def abrir_painel_admin(self):
         painel = ttk.Toplevel(self.root)
@@ -461,7 +593,7 @@ class GerenciadorContas:
         entry_nova_senha.grid(row=1, column=1, pady=5, padx=5)
 
         ttk.Button(frame_form, text="Salvar Usuário", bootstyle="success",
-                   command=lambda: self.salvar_novo_usuario(entry_novo_user, entry_nova_senha)
+                   command=lambda: self.salvar_novo_usuario(entry_novo_user, entry_nova_senha, btn_salvar)
                   ).grid(row=2, columnspan=2, pady=20)
 
         # Aba Logs
@@ -481,7 +613,7 @@ class GerenciadorContas:
         tabela_logs.pack(fill='both', expand=True, pady=10, padx=10)
         self.carregar_log_geral(tabela_logs)
 
-    def salvar_novo_usuario(self, entry_user, entry_senha):
+    def salvar_novo_usuario(self, entry_user, entry_senha, btn_salvar):
         novo_user = entry_user.get().strip()
         nova_senha = entry_senha.get().strip()
 
@@ -489,24 +621,90 @@ class GerenciadorContas:
             messagebox.showwarning("Aviso", "Preencha usuário e senha!")
             return
 
-        sucesso, mensagem = self.db.criar_usuario(novo_user, nova_senha)
-        if sucesso:
-            messagebox.showinfo("Sucesso", mensagem)
-            entry_user.delete(0, 'end')
-            entry_senha.delete(0, 'end')
-        else:
-            messagebox.showerror("Erro", mensagem)
+        btn_salvar.config(text="Salvando...", state="disabled")
+
+        def tarefa_criar_usuario():
+            sucesso, mensagem = self.db.criar_usuario(novo_user, nova_senha)
+            
+            def finalizar():
+                btn_salvar.config(text="Salvar Usuário", state="normal")
+                if sucesso:
+                    messagebox.showinfo("Sucesso", mensagem)
+                    entry_user.delete(0, 'end')
+                    entry_senha.delete(0, 'end')
+                else:
+                    messagebox.showerror("Erro", mensagem)
+                    
+            self.root.after(0, finalizar)
+
+        threading.Thread(target=tarefa_criar_usuario).start()
 
     def carregar_log_geral(self, tabela):
-        logs = self.db.obter_todos_logs()
-        for mes_ano, tipo_conta, conta in logs:
-            tabela.insert("", "end", values=(
-                mes_ano, 
-                tipo_conta, 
-                conta['descricao'], 
-                f"R$ {conta['valor']:.2f}", 
-                conta['usuario']
-            ))
+        # Insere uma linha temporária para mostrar carregamento
+        tabela.insert("", "end", iid="loading", values=("Buscando...", "Aguarde", "Carregando logs da nuvem", "", ""))
+
+        def tarefa_carregar_logs():
+            try:
+                logs = self.db.obter_todos_logs()
+                self.root.after(0, lambda: desenhar_logs(logs))
+            except Exception:
+                self.root.after(0, lambda: tabela.item("loading", values=("Erro", "", "Falha de conexão", "", "")))
+
+        def desenhar_logs(logs):
+            tabela.delete("loading")
+            for mes_ano, tipo_conta, conta in logs:
+                tabela.insert("", "end", values=(
+                    mes_ano, 
+                    tipo_conta, 
+                    conta['descricao'], 
+                    f"R$ {conta['valor']:.2f}", 
+                    conta['usuario']
+                ))
+
+        threading.Thread(target=tarefa_carregar_logs).start()
+
+    def alternar_status_conta(self, tipo_conta, tabela, lbl_total, lbl_divisao):
+        selecionado = tabela.selection()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Selecione uma conta para alterar o status!")
+            return
+
+        valores = tabela.item(selecionado[0], 'values')
+        descricao_alvo = valores[0]
+        valor_str = valores[1].replace('R$ ', '')
+        vencimento_atual = valores[2]
+        status_atual = valores[3]
+        criador_da_conta = valores[4]
+        data_alvo = valores[5]
+
+        # Trava de segurança
+        if self.usuario_logado != "admin" and self.usuario_logado != criador_da_conta:
+            messagebox.showerror("Acesso Negado", "Você só pode alterar o status de contas que você criou!")
+            return
+
+        # Lógica de inversão
+        novo_status = "PAGO" if status_atual in ["PENDENTE", "ATRASADO"] else "PENDENTE"
+
+        conta_atualizada = {
+            "descricao": descricao_alvo,
+            "valor": float(valor_str),
+            "usuario": criador_da_conta, # Mantém o criador original
+            "data": data_alvo,           # Mantém a data original para não quebrar a ID
+            "vencimento": vencimento_atual,
+            "status": novo_status
+        }
+
+        lbl_total.config(text="Atualizando status...")
+
+        def tarefa_status():
+            try:
+                self.db.editar_conta(self.mes_selecionado, tipo_conta, descricao_alvo, data_alvo, conta_atualizada)
+                self.root.after(0, lambda: self.carregar_dados_tabela(tipo_conta, tabela, lbl_total, lbl_divisao))
+            except Exception:
+                self.root.after(0, lambda: messagebox.showerror("Erro", "Falha ao atualizar status na nuvem!"))
+                self.root.after(0, lambda: self.carregar_dados_tabela(tipo_conta, tabela, lbl_total, lbl_divisao))
+
+        threading.Thread(target=tarefa_status).start()
 
 
 if __name__ == "__main__":
