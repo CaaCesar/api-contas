@@ -56,16 +56,16 @@ class ControladorDeDados:
         except requests.exceptions.RequestException:
             raise Exception("Sem conexão com o servidor.")
 
-    def obter_contas(self, mes_ano, tipo_conta):
+    def obter_contas(self, mes_ano, tipo_conta, usuario_logado): # Adicionei o parâmetro
         try:
-            # GET /contas/{mes_ano}/{tipo_conta}
-            resposta = requests.get(f"{self.api_url}/contas/{mes_ano}/{tipo_conta}")
+            # Passamos o utilizador no link para o servidor saber quem filtrar
+            resposta = requests.get(f"{self.api_url}/contas/{mes_ano}/{tipo_conta}?usuario={usuario_logado}")
             if resposta.status_code == 200:
                 return resposta.json().get("contas", [])
             return []
         except requests.exceptions.RequestException:
             return []
-
+        
     def adicionar_conta(self, mes_ano, tipo_conta, nova_conta):
         try:
             # POST /contas/{mes_ano}/{tipo_conta}
@@ -273,9 +273,14 @@ class GerenciadorContas:
         self.notebook.add(self.aba_temporarias, text="Contas Temporárias")
         self.notebook.add(self.aba_divisao, text="Compras em Divisão")
         
+        # NOVO: Aba Pessoal
+        self.aba_pessoal = ttk.Frame(self.notebook)
+        self.notebook.add(self.aba_pessoal, text="Conta Pessoal 🔒")
+        
         self.construir_interface_aba(self.aba_fixas, "fixas")
         self.construir_interface_aba(self.aba_temporarias, "temporarias")
         self.construir_interface_aba(self.aba_divisao, "divisao")
+        self.construir_interface_aba(self.aba_pessoal, "pessoal") # Constrói a aba nova
 
     def construir_interface_aba(self, parent, tipo_conta):
         frame_botoes = ttk.Frame(parent)
@@ -340,29 +345,29 @@ class GerenciadorContas:
 
         def tarefa_em_segundo_plano():
             try:
-                contas = self.db.obter_contas(self.mes_selecionado, tipo_conta)
+                # Agora passamos o self.usuario_logado para o controlador!
+                contas = self.db.obter_contas(self.mes_selecionado, tipo_conta, self.usuario_logado)
                 self.root.after(0, lambda: atualizar_interface(contas))
             except Exception:
                 self.root.after(0, lambda: lbl_total.config(text="Erro de conexão."))
 
         def atualizar_interface(contas):
             soma_total = 0.0
-            hoje = datetime.now().date() # Pega a data local do computador do usuário
+            hoje = datetime.now().date() 
 
             for conta in contas:
+                # ... (resto do código do for loop mantém-se igual) ...
                 status_exibicao = conta.get('status', 'PENDENTE')
                 vencimento_str = conta.get('vencimento', '')
 
-                # LÓGICA DE ATRASO: Verifica apenas se for Conta Fixa ou se tiver data preenchida
                 if status_exibicao == 'PENDENTE' and vencimento_str:
                     try:
                         data_venc = datetime.strptime(vencimento_str, "%d/%m/%Y").date()
                         if data_venc < hoje:
                             status_exibicao = "ATRASADO"
                     except ValueError:
-                        pass # Ignora se a data estiver num formato estranho
+                        pass 
 
-                # Insere a linha definindo a tag (para dar cor)
                 item_id = tabela.insert("", "end", values=(
                     conta['descricao'], 
                     f"R$ {conta['valor']:.2f}", 
@@ -372,20 +377,21 @@ class GerenciadorContas:
                     conta['data']
                 ))
 
-                # Aplica as cores criadas
                 if status_exibicao == "PAGO":
                     tabela.item(item_id, tags=('pago',))
                 elif status_exibicao == "ATRASADO":
                     tabela.item(item_id, tags=('atrasado',))
 
-                # Só soma no total se não estiver pago (opcional, mas faz sentido para contas a pagar)
                 if status_exibicao != "PAGO":
                     soma_total += float(conta['valor'])
                 
             lbl_total.config(text=f"Falta Pagar: R$ {soma_total:.2f}")
-            lbl_divisao.config(text=f"Por pessoa: R$ {(soma_total / 3):.2f}")
-
-        threading.Thread(target=tarefa_em_segundo_plano).start()
+            
+            # Lógica para não mostrar divisão na conta pessoal
+            if tipo_conta == "pessoal":
+                lbl_divisao.config(text="Apenas visualização privada.")
+            else:
+                lbl_divisao.config(text=f"Por pessoa: R$ {(soma_total / 3):.2f}")
 
     def abrir_janela_adicao(self, tipo_conta, tabela, lbl_total, lbl_divisao):
         janela = ttk.Toplevel(self.root)
@@ -450,10 +456,12 @@ class GerenciadorContas:
             messagebox.showwarning("Aviso", "Selecione uma conta na tabela para remover!")
             return
 
+        # AS COLUNAS MUDARAM DE POSIÇÃO!
+        # 0: Nome | 1: Valor | 2: Vencimento | 3: Status | 4: Usuario | 5: Data
         valores = tabela.item(selecionado[0], 'values')
         descricao_alvo = valores[0]
-        criador_da_conta = valores[2]
-        data_alvo = valores[3]
+        criador_da_conta = valores[4] # Agora é o 4 (antes era o 2)
+        data_alvo = valores[5]        # Agora é o 5 (antes era o 3)
 
         if self.usuario_logado != "admin" and self.usuario_logado != criador_da_conta:
             messagebox.showerror("Acesso Negado", "Você só tem permissão para apagar contas que você mesmo criou!")
@@ -562,6 +570,11 @@ class GerenciadorContas:
                 self.root.after(0, lambda: self.carregar_dados_tabela(tipo_conta, tabela, lbl_total, lbl_divisao))
 
         threading.Thread(target=tarefa_editar).start()
+    
+    
+    
+    
+    
     # --- 5. PAINEL ADMIN ---
     def abrir_painel_admin(self):
         painel = ttk.Toplevel(self.root)

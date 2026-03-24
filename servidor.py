@@ -80,10 +80,17 @@ def criar_mes(planilha: NovaPlanilha):
 
 # 3. Gerenciamento de Contas (CRUD)
 @app.get("/contas/{mes_ano}/{tipo_conta}")
-def obter_contas(mes_ano: str, tipo_conta: str):
+def obter_contas(mes_ano: str, tipo_conta: str, usuario: str = Query(None)): # NOVO: Recebe quem está a pedir
     doc = db.collection('contas').document(mes_ano).get()
     if doc.exists:
-        return {"contas": doc.to_dict().get(tipo_conta, [])}
+        dados = doc.to_dict()
+        contas = dados.get(tipo_conta, [])
+        
+        # FILTRO DE PRIVACIDADE: Se for a aba pessoal, devolve só as do próprio utilizador
+        if tipo_conta == "pessoal" and usuario:
+            contas = [c for c in contas if c.get('usuario') == usuario]
+            
+        return {"contas": contas}
     return {"contas": []}
 
 @app.post("/contas/{mes_ano}/{tipo_conta}")
@@ -94,8 +101,12 @@ def adicionar_conta(mes_ano: str, tipo_conta: str, conta: Conta):
         raise HTTPException(status_code=404, detail="Mês não encontrado")
         
     dados = doc.to_dict()
+    # Se a lista ainda não existir (ex: meses antigos), cria agora
+    if tipo_conta not in dados:
+        dados[tipo_conta] = []
+        
     dados[tipo_conta].append(conta.model_dump())
-    doc_ref.set(dados) # Atualiza o documento inteiro no Firebase
+    doc_ref.set(dados)
     return {"sucesso": True}
 
 @app.put("/contas/{mes_ano}/{tipo_conta}")
@@ -104,11 +115,12 @@ def editar_conta(mes_ano: str, tipo_conta: str, edicao: EdicaoConta):
     doc = doc_ref.get()
     
     dados = doc.to_dict()
-    contas = dados[tipo_conta]
+    contas = dados.get(tipo_conta, [])
     
     for i, c in enumerate(contas):
         if c['descricao'] == edicao.descricao_antiga and c['data'] == edicao.data_antiga:
             contas[i] = edicao.conta_atualizada.model_dump()
+            dados[tipo_conta] = contas
             doc_ref.set(dados)
             return {"sucesso": True}
             
@@ -120,16 +132,16 @@ def remover_conta(mes_ano: str, tipo_conta: str, descricao: str = Query(...), da
     doc = doc_ref.get()
     
     dados = doc.to_dict()
-    contas = dados[tipo_conta]
+    contas = dados.get(tipo_conta, [])
     
     for i, c in enumerate(contas):
         if c['descricao'] == descricao and c['data'] == data:
             del contas[i]
+            dados[tipo_conta] = contas
             doc_ref.set(dados)
             return {"sucesso": True}
             
     raise HTTPException(status_code=404, detail="Conta não encontrada")
-
 # 4. Logs Gerais
 @app.get("/logs")
 def obter_todos_logs():
