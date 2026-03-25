@@ -56,16 +56,25 @@ class ControladorDeDados:
         except requests.exceptions.RequestException:
             raise Exception("Sem conexão com o servidor.")
 
-    def obter_contas(self, mes_ano, tipo_conta, usuario_logado): # Adicionei o parâmetro
+    def obter_contas(self, mes_ano, tipo_conta, usuario_logado):
         try:
-            # Passamos o utilizador no link para o servidor saber quem filtrar
-            resposta = requests.get(f"{self.api_url}/contas/{mes_ano}/{tipo_conta}?usuario={usuario_logado}")
+            # timeout=15 impede o aplicativo de carregar para sempre!
+            resposta = requests.get(
+                f"{self.api_url}/contas/{mes_ano}/{tipo_conta}?usuario={usuario_logado}", 
+                timeout=15 
+            )
             if resposta.status_code == 200:
                 return resposta.json().get("contas", [])
-            return []
-        except requests.exceptions.RequestException:
-            return []
-        
+            else:
+                print(f"Erro no servidor. Código: {resposta.status_code}")
+                return []
+        except requests.exceptions.Timeout:
+            print("O servidor demorou muito a responder (Timeout).")
+            raise Exception("Servidor demorou muito.")
+        except requests.exceptions.RequestException as e:
+            print(f"Erro de conexão: {e}")
+            raise Exception("Sem conexão.")
+    
     def adicionar_conta(self, mes_ano, tipo_conta, nova_conta):
         try:
             # POST /contas/{mes_ano}/{tipo_conta}
@@ -345,11 +354,13 @@ class GerenciadorContas:
 
         def tarefa_em_segundo_plano():
             try:
-                # Agora passamos o self.usuario_logado para o controlador!
                 contas = self.db.obter_contas(self.mes_selecionado, tipo_conta, self.usuario_logado)
                 self.root.after(0, lambda: atualizar_interface(contas))
-            except Exception:
-                self.root.after(0, lambda: lbl_total.config(text="Erro de conexão."))
+            except Exception as e:
+                # ISTO VAI SALVAR A NOSSA VIDA! Vai imprimir o erro real na tela preta do terminal.
+                print(f"ERRO AO CARREGAR TABELA {tipo_conta}: {e}") 
+                self.root.after(0, lambda: lbl_total.config(text="Erro ao ligar à nuvem."))
+                self.root.after(0, lambda: lbl_divisao.config(text="Tente novamente."))
 
         def atualizar_interface(contas):
             soma_total = 0.0
